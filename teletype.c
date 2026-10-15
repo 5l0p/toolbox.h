@@ -89,6 +89,7 @@ static int start_shell(tb_app *app) {
         close(in[0]); close(in[1]);
         close(out[0]); close(out[1]);
         setenv("TERM", "dumb", 1);
+     setenv("EDITOR", "busybox ed", 1);
         setenv("NOCOLOR", "1", 1);
         execl("/bin/sh", "sh", (char *)NULL);
         _exit(127);
