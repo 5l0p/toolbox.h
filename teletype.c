@@ -24,6 +24,7 @@ static tb_label *prompt;
 static int to_sh = -1;     /* write end of the shell's stdin           */
 static int from_sh = -1;   /* read end of the shell's stdout + stderr  */
 static pid_t sh_pid = -1;
+static char *last_cmd = NULL;  /* stores the last executed command */
 
 /* ---- output ------------------------------------------------------------- */
 
@@ -116,6 +117,47 @@ static int write_all(int fd, const char *s, size_t n) {
 
 /* ---- prompt ------------------------------------------------------------- */
 
+/* Expands !! to the last command. Returns a new string that should be freed
+ * by the caller. If !! is not found or there's no last command, returns a copy
+ * of the input string. Returns NULL on allocation failure. */
+static char *expand_bang_bang(const char *cmd) {
+    if (!last_cmd || !strstr(cmd, "!!")) {
+        char *copy = malloc(strlen(cmd) + 1);
+        if (copy) strcpy(copy, cmd);
+        return copy;
+    }
+
+    /* Allocate space for the expanded command */
+    size_t cmd_len = strlen(cmd);
+    size_t last_cmd_len = strlen(last_cmd);
+    char *expanded = malloc(cmd_len + last_cmd_len);
+    if (!expanded) return NULL;
+
+    /* Replace all occurrences of !! with the last command */
+    const char *src = cmd;
+    char *dst = expanded;
+    const char *bang_ptr;
+
+    while ((bang_ptr = strstr(src, "!!")) != NULL) {
+        /* Copy everything up to !! */
+        size_t chunk_len = bang_ptr - src;
+        memcpy(dst, src, chunk_len);
+        dst += chunk_len;
+
+        /* Copy the last command */
+        strcpy(dst, last_cmd);
+        dst += last_cmd_len;
+
+        /* Move past the !! */
+        src = bang_ptr + 2;
+    }
+
+    /* Copy the rest of the command */
+    strcpy(dst, src);
+
+    return expanded;
+}
+
 static void on_enter(tb_app *app, void *data) {
     (void)data;
     const char *cmd = tb_field_get(input);
@@ -128,20 +170,37 @@ static void on_enter(tb_app *app, void *data) {
         return;
     }
 
-    char *line = malloc(len + 3);
-    if (!line) return;
-    memcpy(line, cmd, len);
-    line[len] = '\n';
-    line[len + 1] = 0;
+    /* Expand !! to the last command */
+    char *expanded = expand_bang_bang(cmd);
+    if (!expanded) return;
 
+    size_t expanded_len = strlen(expanded);
+    char *line = malloc(expanded_len + 2);
+    if (!line) {
+        free(expanded);
+        return;
+    }
+    memcpy(line, expanded, expanded_len);
+    line[expanded_len] = '\n';
+    line[expanded_len + 1] = 0;
+
+    /* Display the expanded command (for visibility if !! was used) */
     tb_textview_append(app, screen, line);
     tb_field_set(input, "");
 
+    /* Store this command as the last command (only if not "!!" alone) */
+    if (strcmp(expanded, "!!") != 0) {
+        free(last_cmd);
+        last_cmd = malloc(expanded_len + 1);
+        if (last_cmd) strcpy(last_cmd, expanded);
+    }
+
     if (to_sh < 0 && !start_shell(app)) {
         tb_textview_append(app, screen, "[cannot start /bin/sh]\n");
-    } else if (!write_all(to_sh, line, len + 1)) {
+    } else if (!write_all(to_sh, line, expanded_len + 1)) {
         tb_textview_append(app, screen, "[write to shell failed]\n");
     }
+    free(expanded);
     free(line);
 }
 
