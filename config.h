@@ -5,6 +5,8 @@
 #define TB_WIN_TITLE     "Toolbox"
 #define TB_WIN_WIDTH     480
 #define TB_WIN_HEIGHT    320
+#define TB_MIN_W         120  /* smallest size a window can be resized to */
+#define TB_MIN_H         80
 
 /* ---- Fonts (core X11 font names; first one that loads is used) --------- */
 #define TB_FONT          "-misc-fixed-medium-r-normal--13-*-*-*-*-*-iso8859-1"

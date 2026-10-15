@@ -16,6 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/select.h>
+#include <sys/timerfd.h>
+#include <time.h>
+#include <unistd.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
@@ -27,6 +31,14 @@ typedef struct tb_app tb_app;
 typedef struct tb_widget tb_widget;
 typedef struct tb_dialog tb_dialog;
 typedef void (*tb_action)(tb_app *app, void *data);
+typedef void (*tb_fd_cb)(tb_app *app, int fd, void *data);
+
+/* A file descriptor the event loop polls (see tb_watch_fd). fd < 0 = free. */
+typedef struct tb_watch {
+    int fd;
+    tb_fd_cb cb;
+    void *data;
+} tb_watch;
 
 /* Every widget type provides a table of these. Any entry may be NULL.   */
 typedef struct tb_wops {
@@ -125,6 +137,14 @@ struct tb_app {
     /* window close request (WM_DELETE_WINDOW): return 1 to allow closing */
     int (*close_hook)(tb_app *app, void *data);
     void *close_data;
+
+    /* called after the window is resized (see tb_on_resize) */
+    tb_action resize_hook;
+    void *resize_data;
+
+    /* fds watched by the event loop (tb_watch_fd / tb_unwatch_fd) */
+    tb_watch *watches;
+    int nwatches, cwatches;
 };
 
 /* Implemented in toolbox.h. Declared here so modal dialogs can run the loop. */

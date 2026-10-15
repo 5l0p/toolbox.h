@@ -122,9 +122,9 @@ static inline tb_app *tb_app_new(const char *title, int width, int height) {
 
     XSizeHints sh;
     memset(&sh, 0, sizeof sh);
-    sh.flags = PMinSize | PMaxSize;
-    sh.min_width = sh.max_width = width;
-    sh.min_height = sh.max_height = height;
+    sh.flags = PMinSize;
+    sh.min_width = width < TB_MIN_W ? width : TB_MIN_W;
+    sh.min_height = height < TB_MIN_H ? height : TB_MIN_H;
     XSetWMNormalHints(t->dpy, t->win, &sh);
 
     t->wm_delete = XInternAtom(t->dpy, "WM_DELETE_WINDOW", False);
@@ -149,6 +149,7 @@ static inline void tb_app_free(tb_app *t) {
     for (int i = 0; i < t->root.n; i++)
         t->root.kids[i]->ops->destroy(t->root.kids[i]);
     free(t->root.kids);
+    free(t->watches);
     tb_menu_free(t->menus, t->nmenus);
     free(t->bar_status);
     free(t->clip);
@@ -169,6 +170,26 @@ static inline void tb_quit(tb_app *t) {
 static inline void tb_on_close(tb_app *t, int (*hook)(tb_app *, void *), void *data) {
     t->close_hook = hook;
     t->close_data = data;
+}
+
+/* Called after the window changes size. The toolkit has already made the
+ * back buffer match the new size; the app moves its own widgets here. */
+static inline void tb_on_resize(tb_app *t, tb_action hook, void *data) {
+    t->resize_hook = hook;
+    t->resize_data = data;
+}
+
+/* Track a new window size: new back buffer, full repaint, app callback. */
+static inline void tb_app_resize(tb_app *t, int width, int height) {
+    if (width < 1 || height < 1 || (width == t->width && height == t->height)) return;
+    XFreePixmap(t->dpy, t->buf);
+    t->width = width;
+    t->height = height;
+    t->buf = XCreatePixmap(t->dpy, t->win, (unsigned)width, (unsigned)height,
+                           (unsigned)DefaultDepth(t->dpy, t->screen));
+    tb_region_set(t, tb_rect(0, 0, width, height));
+    if (t->resize_hook) t->resize_hook(t, t->resize_data);
+    tb_damage_all(t);
 }
 
 static inline void tb_set_title(tb_app *t, const char *title) {
@@ -313,13 +334,118 @@ static inline void tb_on_key(tb_app *t, XKeyEvent *e) {
 }
 
 /* Process one X event and repaint. Modal dialogs call this in a loop. */
+/* ---- file descriptors --------------------------------------------------- */
+
+/* Call cb(app, fd, data) from the event loop whenever fd is readable. The
+ * callback runs between X events, so it may change widgets. Unwatch an fd
+ * before closing it. */
+static inline void tb_watch_fd(tb_app *t, int fd, tb_fd_cb cb, void *data) {
+    for (int i = 0; i < t->nwatches; i++)     /* reuse a free slot */
+        if (t->watches[i].fd < 0) {
+            t->watches[i] = (tb_watch){ fd, cb, data };
+            return;
+        }
+    tb_watch *w = tb_push((void **)&t->watches, &t->nwatches, &t->cwatches, sizeof *w);
+    *w = (tb_watch){ fd, cb, data };
+}
+
+static inline void tb_unwatch_fd(tb_app *t, int fd) {
+    for (int i = 0; i < t->nwatches; i++)
+        if (t->watches[i].fd == fd) t->watches[i].fd = -1;
+}
+
+/* Block until the X connection or a watched fd is readable, then run the
+ * callbacks of the readable fds. Returns early on a signal. */
+static inline void tb_wait_fds(tb_app *t) {
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    int xfd = ConnectionNumber(t->dpy), max = xfd;
+    FD_SET(xfd, &rfds);
+    for (int i = 0; i < t->nwatches; i++) {
+        int fd = t->watches[i].fd;
+        if (fd < 0) continue;
+        FD_SET(fd, &rfds);
+        if (fd > max) max = fd;
+    }
+    if (select(max + 1, &rfds, NULL, NULL, NULL) <= 0) return;
+    /* Re-read the entry each time: a callback may add or remove watches. */
+    for (int i = 0; i < t->nwatches; i++) {
+        tb_watch w = t->watches[i];
+        if (w.fd >= 0 && FD_ISSET(w.fd, &rfds)) w.cb(t, w.fd, w.data);
+    }
+}
+
+/* ---- timers ------------------------------------------------------------- */
+
+/* A repeating timer. Its callback runs from the event loop every `ms`
+ * milliseconds. Free it with tb_timer_free() before the app is freed. */
+typedef struct tb_timer {
+    tb_app *app;
+    int fd;
+    tb_action cb;
+    void *data;
+} tb_timer;
+
+/* Arm the timer for a new interval; ms <= 0 stops it. */
+static inline void tb_timer_set(tb_timer *tm, int ms) {
+    struct itimerspec its;
+    memset(&its, 0, sizeof its);
+    if (ms > 0) {
+        its.it_interval.tv_sec = ms / 1000;
+        its.it_interval.tv_nsec = (long)(ms % 1000) * 1000000L;
+        its.it_value = its.it_interval;
+    }
+    timerfd_settime(tm->fd, 0, &its, NULL);
+}
+
+/* Read/fire callback: the fd is readable once per expiry. */
+static inline void tb_timer_on_fire(tb_app *t, int fd, void *data) {
+    tb_timer *tm = (tb_timer *)data;
+    uint64_t expirations;
+    if (read(fd, &expirations, sizeof expirations) != sizeof expirations) return;
+    tm->cb(t, tm->data);
+}
+
+static inline tb_timer *tb_timer_new(tb_app *t, int ms, tb_action cb, void *data) {
+    tb_timer *tm = calloc(1, sizeof *tm);
+    if (!tm) tb_oom();
+    tm->fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (tm->fd < 0) {
+        free(tm);
+        return NULL;
+    }
+    tm->app = t;
+    tm->cb = cb;
+    tm->data = data;
+    tb_timer_set(tm, ms);
+    tb_watch_fd(t, tm->fd, tb_timer_on_fire, tm);
+    return tm;
+}
+
+static inline void tb_timer_free(tb_timer *tm) {
+    if (!tm) return;
+    tb_unwatch_fd(tm->app, tm->fd);
+    close(tm->fd);
+    free(tm);
+}
+
 static inline void tb_pump(tb_app *t) {
     XEvent ev;
+    if (!XPending(t->dpy)) {
+        tb_wait_fds(t);
+        if (!XPending(t->dpy)) {          /* only watched fds were ready */
+            tb_draw(t);
+            return;
+        }
+    }
     int was = t->overlay != NULL || t->open_menu >= 0 || t->modal != NULL;
     XNextEvent(t->dpy, &ev);
     switch (ev.type) {
     case Expose:
         if (ev.xexpose.count == 0) tb_damage_all(t);
+        break;
+    case ConfigureNotify:
+        tb_app_resize(t, ev.xconfigure.width, ev.xconfigure.height);
         break;
     case ButtonPress:
         tb_on_press(t, &ev.xbutton);

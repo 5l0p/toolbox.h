@@ -209,6 +209,20 @@ static void button_home(tb_app *app, void *data) {
 
 /* ---- main -------------------------------------------------------------- */
 
+/* The file list fills the window below the path row; the status line sits
+ * at the bottom. */
+static void layout(tb_app *app) {
+    view->base.w = app->width - 16;
+    view->base.h = app->height - 80;
+    status_label->base.y = app->height - 20;
+    tb_damage_all(app);
+}
+
+static void on_resize(tb_app *app, void *data) {
+    (void)data;
+    layout(app);
+}
+
 int main(int argc, char **argv) {
     const char *start = argc > 1 ? argv[1] : getenv("HOME");
     if (!start) start = ".";
@@ -240,6 +254,7 @@ int main(int argc, char **argv) {
 
     status_label = tb_label_new(app, 8, 330, TB_NAVY, "");
 
+    tb_on_resize(app, on_resize, NULL);
     go_to(app, root_path);
     tb_run(app);
     tb_app_free(app);

@@ -39,8 +39,8 @@ static const tb_wops TB_ICON_OPS = {
     tb_icon_draw, NULL, NULL, NULL, NULL, NULL, tb_icon_destroy, NULL
 };
 
-static inline void tb_icon_new(tb_app *t, int x, int y, int w, int h,
-                               const unsigned char *bits, int color) {
+static inline tb_icon *tb_icon_new(tb_app *t, int x, int y, int w, int h,
+                                   const unsigned char *bits, int color) {
     tb_icon *ic = calloc(1, sizeof *ic);
     if (!ic) tb_oom();
     ic->base.ops = &TB_ICON_OPS;
@@ -51,6 +51,7 @@ static inline void tb_icon_new(tb_app *t, int x, int y, int w, int h,
     ic->bits = bits;
     ic->color = color & 15;
     tb_add_widget(t, &ic->base);
+    return ic;
 }
 
 #endif /* TB_ICON_H */

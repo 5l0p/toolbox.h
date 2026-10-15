@@ -187,6 +187,20 @@ static void edit_select_all(tb_app *app, void *data) {
 
 /* ---- main -------------------------------------------------------------- */
 
+/* Text fills the window below the menubar; the status bar sits at the bottom. */
+static void layout(tb_app *app) {
+    tb_textview_resize(app, editor, 0, ED_MENU_H,
+                       app->width, app->height - ED_MENU_H - ED_STATUS_H);
+    status->base.y = app->height - ED_STATUS_H;
+    status->base.w = app->width;
+    tb_damage_all(app);
+}
+
+static void on_resize(tb_app *app, void *data) {
+    (void)data;
+    layout(app);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         snprintf(filename, sizeof filename, "%s", argv[1]);
@@ -217,6 +231,7 @@ int main(int argc, char **argv) {
     status = tb_status_new(app, 0, ED_H - ED_STATUS_H, ED_W, ED_STATUS_H, "");
     tb_textview_on_update(editor, on_update, NULL);
     tb_on_close(app, on_close, NULL);
+    tb_on_resize(app, on_resize, NULL);
 
     FILE *probe = fopen(filename, "rb");   /* a missing file is an empty document */
     if (probe) {

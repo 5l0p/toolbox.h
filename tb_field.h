@@ -29,6 +29,7 @@ typedef struct tb_field {
     int hx;              /* horizontal scroll, pixels                         */
     int dragging;
     int rightpad;        /* width reserved on the right (used by combo boxes)  */
+    int plain;           /* 1 = no frame around the field                      */
     tb_action on_accept, on_change;
     void *accept_data, *change_data;
 } tb_field;
@@ -113,7 +114,7 @@ static inline void tb_field_draw(tb_app *t, tb_widget *wb, int focused) {
     int fw = wb->w - f->rightpad;
 
     tb_fill(t, wb->x, wb->y, fw, wb->h, TB_C_BG);
-    tb_frame(t, wb->x, wb->y, fw, wb->h, TB_C_FG);
+    if (!f->plain) tb_frame(t, wb->x, wb->y, fw, wb->h, TB_C_FG);
 
     int ix = wb->x + TB_FIELD_PAD + 1, iy = wb->y + 2;
     int iw = tb_field_inner_w(f), ih = wb->h - 4;
