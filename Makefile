@@ -14,7 +14,7 @@ HDRS = config.h toolbox.h tb_core.h tb_clip.h tb_doc.h tb_scroll.h tb_menu.h \
 LUA_DIR = lua-5.5.0
 LUA_OBJ = $(LUA_DIR)/onelua.o
 
-all: demo textedit filebrowser controls gallery teletype catclock tb_lua
+all: demo textedit filebrowser controls gallery teletype tb_lua
 
 # Lua core and libraries as one object (onelua.c without its main()).
 $(LUA_OBJ): $(LUA_DIR)/onelua.c
@@ -40,9 +40,6 @@ gallery: gallery.c $(HDRS)
 
 teletype: teletype.c $(HDRS)
 	$(CC) $(CFLAGS) -o $@ teletype.c $(LDFLAGS) $(LDLIBS)
-
-catclock: catclock.c $(HDRS)
-	$(CC) $(CFLAGS) -o $@ catclock.c $(LDFLAGS) $(LDLIBS) -lm
 
 clean:
 	rm -f demo textedit filebrowser controls gallery teletype catclock tb_lua $(LUA_OBJ)
