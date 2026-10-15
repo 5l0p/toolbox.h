@@ -197,15 +197,6 @@ static void menu_home(tb_app *app, void *data) {
     if (home) go_to(app, home);
 }
 
-static void button_up(tb_app *app, void *data) {
-    (void)data;
-    go_up(app);
-}
-
-static void button_home(tb_app *app, void *data) {
-    (void)data;
-    menu_home(app, NULL);
-}
 
 /* ---- main -------------------------------------------------------------- */
 
@@ -239,13 +230,11 @@ int main(int argc, char **argv) {
     tb_menu_item(app, "Up", menu_up, NULL);
     tb_menu_item(app, "Home", menu_home, NULL);
 
-    tb_button_new(app, 8, 26, 56, 20, "Up", button_up, NULL);
-    tb_button_new(app, 70, 26, 64, 20, "Home", button_home, NULL);
     path_label = tb_label_new(app, 142, 31, TB_BLACK, root_path);
 
     const char *titles[3] = { "Name", "Size", "Kind" };
     const int widths[3] = { 260, 90, 130 };
-    view = tb_tree_new(app, 8, 52, FB_W - 16, 270, 3, titles, widths);
+    view = tb_tree_new(app, 0, 20, FB_W , FB_H - 20 - 20 , 3, titles, widths);
     tb_view_folders_first(view, 1);
     tb_view_sort(view, 0, 0);            /* by name, ascending */
     tb_view_on_select(view, on_select, view);
