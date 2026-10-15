@@ -25,6 +25,9 @@
 #include "tb_button.h"
 #include "tb_scrollbar.h"
 #include "tb_textview.h"
+#include "tb_view.h"
+#include "tb_list.h"
+#include "tb_tree.h"
 
 /* ---- application ------------------------------------------------------- */
 
@@ -152,6 +155,7 @@ static inline void tb_on_press(tb_app *t, XButtonEvent *e) {
 
     tb_widget *w = tb_hit(t, e->x, e->y);
     if (!w) return;
+    t->event_time = e->time;
     if (w->focusable) t->focus = w;
     if (w->ops->press && w->ops->press(t, w, e->x, e->y))
         t->grab = w;

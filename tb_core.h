@@ -75,6 +75,7 @@ struct tb_app {
     int open_item;        /* -1 = none highlighted  */
     tb_widget *grab;      /* receives motion/release while non-NULL */
     tb_widget *focus;     /* receives key events                    */
+    unsigned long event_time; /* timestamp of the current press (ms)  */
     int running;
 };
 
