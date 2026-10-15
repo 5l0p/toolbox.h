@@ -523,6 +523,28 @@ static const tb_wops TB_VIEW_OPS = {
     tb_view_wheel, tb_view_key, tb_view_destroy, NULL
 };
 
+/* Replace the column titles and widths. Removes all rows, because existing
+ * cells no longer match the new layout. */
+static inline void tb_view_set_columns(tb_app *t, tb_view *v, int ncols,
+                                       const char **titles, const int *widths) {
+    tb_view_clear(v);
+    for (int i = 0; i < v->ncols; i++) free(v->titles[i]);
+    free(v->titles);
+    free(v->widths);
+    v->titles = calloc((size_t)ncols, sizeof *v->titles);
+    v->widths = calloc((size_t)ncols, sizeof *v->widths);
+    if (!v->titles || !v->widths) tb_oom();
+    v->ncols = ncols;
+    for (int i = 0; i < ncols; i++) {
+        v->titles[i] = tb_strdup(titles[i]);
+        v->widths[i] = widths[i];
+    }
+    v->sort_col = -1;
+    v->sort_desc = 0;
+    tb_view_sync(t, v);
+    tb_damage(t, &v->base);
+}
+
 /* Use tb_list_new() or tb_tree_new() rather than calling this directly. */
 static inline tb_view *tb_view_new(tb_app *t, int x, int y, int w, int h,
                                    int ncols, const char **titles, const int *widths,

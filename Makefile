@@ -11,7 +11,17 @@ HDRS = config.h toolbox.h tb_core.h tb_clip.h tb_doc.h tb_scroll.h tb_menu.h \
        tb_spin.h tb_combo.h tb_tabs.h tb_status.h tb_colorgrid.h \
        tb_fs.h tb_filedlg.h
 
-all: demo textedit filebrowser controls gallery
+LUA_DIR = lua-5.5.0
+LUA_OBJ = $(LUA_DIR)/onelua.o
+
+all: demo textedit filebrowser controls gallery tb_lua
+
+# Lua core and libraries as one object (onelua.c without its main()).
+$(LUA_OBJ): $(LUA_DIR)/onelua.c
+	$(CC) -O2 -DMAKE_LIB -DLUA_USE_LINUX -c -o $@ $<
+
+tb_lua: tb_lua.c $(HDRS) $(LUA_OBJ)
+	$(CC) $(CFLAGS) -I$(LUA_DIR) -o $@ tb_lua.c $(LUA_OBJ) $(LDFLAGS) $(LDLIBS) -lm -ldl
 
 demo: main.c $(HDRS)
 	$(CC) $(CFLAGS) -o $@ main.c $(LDFLAGS) $(LDLIBS)
@@ -29,6 +39,6 @@ gallery: gallery.c $(HDRS)
 	$(CC) $(CFLAGS) -o $@ gallery.c $(LDFLAGS) $(LDLIBS)
 
 clean:
-	rm -f demo textedit filebrowser controls gallery
+	rm -f demo textedit filebrowser controls gallery tb_lua $(LUA_OBJ)
 
 .PHONY: all clean

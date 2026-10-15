@@ -150,6 +150,7 @@ static inline void tb_app_free(tb_app *t) {
         t->root.kids[i]->ops->destroy(t->root.kids[i]);
     free(t->root.kids);
     tb_menu_free(t->menus, t->nmenus);
+    free(t->bar_status);
     free(t->clip);
     XFreeGC(t->dpy, t->gc);
     XFreePixmap(t->dpy, t->buf);

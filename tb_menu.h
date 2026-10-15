@@ -82,6 +82,20 @@ static inline void tb_menu_draw_bar(tb_app *t) {
         tb_str(t, m->x + TB_MENU_PAD_X, tb_text_base(t, 0, TB_MENUBAR_H),
                sel ? TB_C_SEL_FG : TB_C_FG, m->title);
     }
+    if (t->bar_status) {
+        int w = tb_text_w(t, t->bar_status);
+        int x = t->width - TB_MENU_PAD_X - w;
+        if (x > 0)
+            tb_str(t, x, tb_text_base(t, 0, TB_MENUBAR_H), TB_C_FG, t->bar_status);
+    }
+}
+
+/* Text shown at the right of the menubar (NULL or "" clears it). Not a
+ * menu: it is display-only and takes no clicks. */
+static inline void tb_menu_status(tb_app *t, const char *text) {
+    free(t->bar_status);
+    t->bar_status = (text && *text) ? tb_strdup(text) : NULL;
+    tb_damage_rect(t, 0, 0, t->width, TB_MENUBAR_H);
 }
 
 /* Drawn after all widgets so it sits on top. */

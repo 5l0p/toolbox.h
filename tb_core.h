@@ -97,6 +97,7 @@ struct tb_app {
 
     tb_menu *menus;
     int nmenus, cmenus;
+    char *bar_status;     /* text at the right of the menubar, or NULL */
 
     tb_container root;    /* top-level widgets */
     tb_container *build;  /* where new widgets go while building, NULL = root */
