@@ -161,7 +161,6 @@ static char *expand_bang_bang(const char *cmd) {
 static void on_enter(tb_app *app, void *data) {
     (void)data;
     const char *cmd = tb_field_get(input);
-    size_t len = strlen(cmd);
 
     /* "clear" is handled here: wipe the transcript, don't send it to sh. */
     if (strcmp(cmd, "clear") == 0) {
