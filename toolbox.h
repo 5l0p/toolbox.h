@@ -3,21 +3,43 @@
 
 /*
  * toolbox - a small Macintosh System 6/7 style UI toolkit on plain Xlib
- * (core protocol only). Header-only: include this from exactly the
- * files you need; all functions are static inline.
+ * (core protocol plus the ICCCM clipboard). Header-only: include this
+ * from the files you need; all functions are static inline.
  *
  * Colours are indices 0..15 into the palette in config.h (TB_* names).
  *
- * Widgets live in their own headers and are included here:
- *   tb_menu.h       menubar (tb_menu_new / tb_menu_item)
- *   tb_label.h      tb_label_new / tb_label_set
- *   tb_button.h     tb_button_new
- *   tb_scrollbar.h  tb_scrollbar_new / _set / _get
- *   tb_textview.h   tb_textview_new / _set / _get
- * Their internals are in tb_core.h, tb_scroll.h and tb_doc.h.
+ * Widgets (each in its own header):
+ *   tb_menu.h        menubar                   tb_menu_new / tb_menu_item
+ *   tb_label.h       static text               tb_label_new / tb_label_set
+ *   tb_button.h      push button               tb_button_new
+ *   tb_check.h       checkbox                  tb_checkbox_new
+ *   tb_radio.h       radio group              tb_radio_new
+ *   tb_group.h       group box, rule           tb_groupbox_new, tb_rule_new
+ *   tb_icon.h        1-bit bitmap              tb_icon_new
+ *   tb_field.h       single-line field         tb_field_new
+ *   tb_popup.h       pop-up button             tb_popup_new
+ *   tb_combo.h       combo box                 tb_combo_new
+ *   tb_scrollbar.h   scroll bar                tb_scrollbar_new
+ *   tb_scrollwin.h   scroll window             tb_scrollwin_new
+ *   tb_textview.h    multi-line editor         tb_textview_new
+ *   tb_view.h        multi-column row engine
+ *   tb_list.h        flat list                 tb_list_new
+ *   tb_tree.h        tree                      tb_tree_new
+ *   tb_slider.h      slider                    tb_slider_new
+ *   tb_progress.h    progress bar              tb_progress_new
+ *   tb_spin.h        spin box                  tb_spin_new
+ *   tb_tabs.h        tab strip                 tb_tabs_new
+ *   tb_status.h      status bar                tb_status_new
+ *   tb_colorgrid.h   16-colour grid            tb_colorgrid_new
+ *   tb_dialog.h      modal dialog              tb_dialog_new / tb_dialog_run
+ *   tb_alert.h       alert box                 tb_alert
+ *
+ * Event loop: tb_run(). Redraws are partial: widgets mark their area dirty
+ * (tb_damage) and only that area is repainted.
  */
 
 #include "tb_core.h"
+#include "tb_clip.h"
 #include "tb_doc.h"
 #include "tb_scroll.h"
 #include "tb_menu.h"
@@ -28,6 +50,24 @@
 #include "tb_view.h"
 #include "tb_list.h"
 #include "tb_tree.h"
+#include "tb_check.h"
+#include "tb_radio.h"
+#include "tb_group.h"
+#include "tb_icon.h"
+#include "tb_field.h"
+#include "tb_popup.h"
+#include "tb_dialog.h"
+#include "tb_alert.h"
+#include "tb_scrollwin.h"
+#include "tb_slider.h"
+#include "tb_progress.h"
+#include "tb_spin.h"
+#include "tb_combo.h"
+#include "tb_tabs.h"
+#include "tb_status.h"
+#include "tb_colorgrid.h"
+#include "tb_fs.h"
+#include "tb_filedlg.h"
 
 /* ---- application ------------------------------------------------------- */
 
@@ -94,6 +134,10 @@ static inline tb_app *tb_app_new(const char *title, int width, int height) {
                            (unsigned)DefaultDepth(t->dpy, t->screen));
     t->gc = XCreateGC(t->dpy, t->win, 0, NULL);
     XSetFont(t->dpy, t->gc, t->font->fid);
+    tb_region_set(t, tb_rect(0, 0, width, height));
+
+    tb_clip_init(t);
+    tb_damage_all(t);
 
     XMapWindow(t->dpy, t->win);
     XFlush(t->dpy);
@@ -102,10 +146,11 @@ static inline tb_app *tb_app_new(const char *title, int width, int height) {
 
 static inline void tb_app_free(tb_app *t) {
     if (!t) return;
-    for (int i = 0; i < t->nwidgets; i++)
-        t->widgets[i]->ops->destroy(t->widgets[i]);
-    free(t->widgets);
+    for (int i = 0; i < t->root.n; i++)
+        t->root.kids[i]->ops->destroy(t->root.kids[i]);
+    free(t->root.kids);
     tb_menu_free(t->menus, t->nmenus);
+    free(t->clip);
     XFreeGC(t->dpy, t->gc);
     XFreePixmap(t->dpy, t->buf);
     XFreeFont(t->dpy, t->font);
@@ -118,55 +163,101 @@ static inline void tb_quit(tb_app *t) {
     t->running = 0;
 }
 
-/* Topmost clickable widget under (x, y), or NULL. */
-static inline tb_widget *tb_hit(tb_app *t, int x, int y) {
-    for (int i = t->nwidgets - 1; i >= 0; i--) {
-        tb_widget *w = t->widgets[i];
-        if (w->clickable && tb_inside(w, x, y)) return w;
-    }
-    return NULL;
+/* Ask before the window closes (WM_DELETE_WINDOW). The hook returns 1 to
+ * allow it, 0 to keep the window open. */
+static inline void tb_on_close(tb_app *t, int (*hook)(tb_app *, void *), void *data) {
+    t->close_hook = hook;
+    t->close_data = data;
 }
 
-/* ---- drawing ----------------------------------------------------------- */
+static inline void tb_set_title(tb_app *t, const char *title) {
+    XStoreName(t->dpy, t->win, title);
+}
 
+/* ---- focus -------------------------------------------------------------- */
+
+/* Move focus to the next (dir = 1) or previous (dir = -1) focusable
+ * visible child of c, wrapping around. */
+static inline void tb_focus_step(tb_app *t, tb_container *c, int dir) {
+    (void)t;
+    int n = c->n;
+    if (n == 0) return;
+    int start = -1;
+    for (int i = 0; i < n; i++)
+        if (c->kids[i] == c->focus) start = i;
+    for (int k = 1; k <= n; k++) {
+        int base = start < 0 ? (dir > 0 ? -1 : n) : start;
+        int i = ((base + dir * k) % n + n) % n;
+        tb_widget *w = c->kids[i];
+        if (w->focusable && !w->hidden) {
+            c->focus = w;
+            return;
+        }
+    }
+}
+
+/* ---- drawing ------------------------------------------------------------ */
+
+/* Repaint the dirty area (or everything, if a full repaint is pending). */
 static inline void tb_draw(tb_app *t) {
-    tb_fill(t, 0, 0, t->width, t->height, TB_C_BG);
+    if (!t->dirty) return;
+    XRectangle win = tb_rect(0, 0, t->width, t->height);
+    XRectangle r = win;
+    if (!t->dirty_full)
+        r = tb_isect(win, tb_rect(t->dx0, t->dy0, t->dx1 - t->dx0, t->dy1 - t->dy0));
+
+    t->ox = 0;
+    t->oy = 0;
+    tb_region_set(t, r);
+    tb_fill(t, r.x, r.y, r.width, r.height, TB_C_BG);
     tb_menu_draw_bar(t);
-    for (int i = 0; i < t->nwidgets; i++) {
-        tb_widget *w = t->widgets[i];
-        w->ops->draw(t, w, w == t->focus);
-    }
-    tb_menu_draw_dropdown(t);
-    XCopyArea(t->dpy, t->buf, t->win, t->gc, 0, 0,
-              (unsigned)t->width, (unsigned)t->height, 0, 0);
+    tb_draw_kids(t, &t->root);
+    if (t->modal) tb_dialog_paint(t, t->modal);
+    if (t->overlay && t->overlay->ops->overlay)
+        t->overlay->ops->overlay(t, t->overlay);
+    if (!t->modal) tb_menu_draw_dropdown(t);
+
+    XCopyArea(t->dpy, t->buf, t->win, t->gc, r.x, r.y, r.width, r.height, r.x, r.y);
     XFlush(t->dpy);
+    t->dirty = 0;
+    t->dirty_full = 0;
 }
 
-/* ---- event dispatch ---------------------------------------------------- */
+/* ---- event dispatch ----------------------------------------------------- */
 
 static inline void tb_on_press(tb_app *t, XButtonEvent *e) {
+    tb_container *c = tb_active(t);
     if (e->button == Button4 || e->button == Button5) {
-        tb_widget *w = tb_hit(t, e->x, e->y);
-        if (w && w->ops->wheel) w->ops->wheel(t, w, e->button == Button4 ? -1 : 1);
+        tb_widget *w = tb_hit_in(c, e->x, e->y);
+        if (w && w->ops->wheel) {
+            w->ops->wheel(t, w, e->button == Button4 ? -1 : 1);
+            tb_damage(t, w);
+        }
         return;
     }
     if (e->button != Button1) return;
-    if (tb_menu_press(t, e->x, e->y)) return;
-
-    tb_widget *w = tb_hit(t, e->x, e->y);
+    if (!t->modal && tb_menu_press(t, e->x, e->y)) {
+        tb_damage_all(t);
+        return;
+    }
+    tb_widget *w = tb_hit_in(c, e->x, e->y);
     if (!w) return;
     t->event_time = e->time;
-    if (w->focusable) t->focus = w;
+    if (w->focusable) c->focus = w;
     if (w->ops->press && w->ops->press(t, w, e->x, e->y))
         t->grab = w;
+    tb_damage(t, w);
 }
 
 static inline void tb_on_motion(tb_app *t, XMotionEvent *e) {
     if (t->grab) {
-        if (t->grab->ops->motion) t->grab->ops->motion(t, t->grab, e->x, e->y);
+        tb_widget *g = t->grab;
+        if (g->ops->motion) g->ops->motion(t, g, e->x, e->y);
+        tb_damage(t, g);
         return;
     }
-    tb_menu_motion(t, e->x, e->y);
+    if (!t->modal && tb_menu_motion(t, e->x, e->y))
+        tb_damage_all(t);
 }
 
 static inline void tb_on_release(tb_app *t, XButtonEvent *e) {
@@ -175,50 +266,99 @@ static inline void tb_on_release(tb_app *t, XButtonEvent *e) {
         tb_widget *g = t->grab;
         t->grab = NULL;   /* clear first: the callback may change things */
         if (g->ops->release) g->ops->release(t, g, e->x, e->y);
+        tb_damage(t, g);
         return;
     }
-    tb_menu_release(t, e->x, e->y);
+    if (!t->modal && tb_menu_release(t, e->x, e->y))
+        tb_damage_all(t);
+}
+
+static inline void tb_on_key(tb_app *t, XKeyEvent *e) {
+    KeySym ks = XLookupKeysym(e, 0);
+    tb_container *c = tb_active(t);
+
+    if (ks == XK_Escape) {
+        if (t->modal) {
+            if (t->modal->cancel_value >= 0)
+                tb_dialog_close(t, t->modal, t->modal->cancel_value);
+            return;
+        }
+        if (t->open_menu >= 0) {
+            tb_menu_close(t);
+            tb_damage_all(t);
+            return;
+        }
+    }
+    if (ks == XK_Tab || ks == XK_ISO_Left_Tab) {
+        tb_focus_step(t, c, (e->state & ShiftMask) ? -1 : 1);
+        tb_damage_all(t);
+        return;
+    }
+
+    tb_widget *f = c->focus;
+    /* Return activates the dialog's default button, unless the focused
+     * widget uses Return for itself. */
+    if (t->modal && t->modal->def && (ks == XK_Return || ks == XK_KP_Enter) &&
+        (!f || (f->ops != &TB_TEXTVIEW_OPS && f->ops != &TB_FIELD_OPS &&
+                f->ops != &TB_VIEW_OPS))) {
+        tb_widget *d = t->modal->def;
+        if (d->ops->key) d->ops->key(t, d, e);
+        return;
+    }
+    if (f && f->ops->key) {
+        f->ops->key(t, f, e);
+        tb_damage(t, f);
+    }
+}
+
+/* Process one X event and repaint. Modal dialogs call this in a loop. */
+static inline void tb_pump(tb_app *t) {
+    XEvent ev;
+    int was = t->overlay != NULL || t->open_menu >= 0 || t->modal != NULL;
+    XNextEvent(t->dpy, &ev);
+    switch (ev.type) {
+    case Expose:
+        if (ev.xexpose.count == 0) tb_damage_all(t);
+        break;
+    case ButtonPress:
+        tb_on_press(t, &ev.xbutton);
+        break;
+    case MotionNotify:
+        tb_on_motion(t, &ev.xmotion);
+        break;
+    case ButtonRelease:
+        tb_on_release(t, &ev.xbutton);
+        break;
+    case KeyPress:
+        tb_on_key(t, &ev.xkey);
+        break;
+    case SelectionRequest:
+        tb_clip_on_request(t, &ev.xselectionrequest);
+        break;
+    case SelectionNotify:
+        tb_clip_on_notify(t, &ev.xselection);
+        break;
+    case ClientMessage:
+        if ((Atom)ev.xclient.data.l[0] == t->wm_delete) {
+            if (!t->close_hook || t->close_hook(t, t->close_data))
+                t->running = 0;
+        }
+        break;
+    default:
+        break;
+    }
+    /* Menus, popups and dialogs paint over the window: repaint it all
+     * when any of them was or is open. */
+    if (was || t->overlay || t->open_menu >= 0 || t->modal)
+        tb_damage_all(t);
+    tb_draw(t);
 }
 
 static inline void tb_run(tb_app *t) {
-    XEvent ev;
     t->running = 1;
-    tb_draw(t);
-    while (t->running) {
-        XNextEvent(t->dpy, &ev);
-        switch (ev.type) {
-        case Expose:
-            if (ev.xexpose.count == 0) tb_draw(t);
-            break;
-        case ButtonPress:
-            tb_on_press(t, &ev.xbutton);
-            break;
-        case MotionNotify:
-            tb_on_motion(t, &ev.xmotion);
-            break;
-        case ButtonRelease:
-            tb_on_release(t, &ev.xbutton);
-            break;
-        case KeyPress: {
-            KeySym ks = XLookupKeysym(&ev.xkey, 0);
-            if (ks == XK_Escape && t->open_menu >= 0)
-                tb_menu_close(t);
-            else if (t->focus && t->focus->ops->key)
-                t->focus->ops->key(t, t->focus, &ev.xkey);
-            break;
-        }
-        case ClientMessage:
-            if ((Atom)ev.xclient.data.l[0] == t->wm_delete)
-                t->running = 0;
-            break;
-        default:
-            break;
-        }
-        if (t->running) tb_draw(t);
-    }
+    tb_damage_all(t);
+    while (t->running)
+        tb_pump(t);
 }
-
-/* ---- menus (public names) --------------------------------------------- */
-/* tb_menu_new() and tb_menu_item() are defined in tb_menu.h. */
 
 #endif /* TOOLBOX_H */

@@ -122,7 +122,8 @@ static void load_dir(tb_node *parent, const char *path) {
         else format_size(e[i].size, size, sizeof size);
         kind_of(e[i].name, e[i].isdir, kind, sizeof kind);
         const char *cells[3] = { e[i].name, size, kind };
-        tb_tree_add(view, parent, cells, 3, NULL, e[i].isdir);
+        tb_node *nd = tb_tree_add(view, parent, cells, 3, NULL, e[i].isdir);
+        tb_view_set_key(nd, 1, (double)e[i].size);
         free(e[i].name);
     }
     free(e);
@@ -231,6 +232,8 @@ int main(int argc, char **argv) {
     const char *titles[3] = { "Name", "Size", "Kind" };
     const int widths[3] = { 260, 90, 130 };
     view = tb_tree_new(app, 8, 52, FB_W - 16, 270, 3, titles, widths);
+    tb_view_folders_first(view, 1);
+    tb_view_sort(view, 0, 0);            /* by name, ascending */
     tb_view_on_select(view, on_select, view);
     tb_view_on_open(view, on_open, view);
     tb_view_on_expand(view, on_expand, view);

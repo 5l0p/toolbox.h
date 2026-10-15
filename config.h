@@ -19,7 +19,7 @@
 #define TB_SCROLL_W      16   /* scrollbar thickness (and arrow box size) */
 #define TB_SCROLL_MIN_THUMB 8 /* smallest thumb length                    */
 #define TB_SCROLL_STEP   16   /* horizontal text scroll step, in pixels   */
-#define TB_TEXT_PAD      4    /* inner padding of text widgets            */
+#define TB_TEXT_PAD      2    /* inner padding of text widgets            */
 #define TB_ROW_PAD       2    /* vertical padding inside list/tree rows   */
 #define TB_CELL_PAD      4    /* horizontal padding inside list cells     */
 #define TB_TREE_INDENT   14   /* indent per tree level                    */

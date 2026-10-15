@@ -138,8 +138,7 @@ static inline void tb_sb_arrow(tb_app *t, int bx, int by, int size, int dir, int
         pts[2].x = bx + a;   pts[2].y = by + b;
         break;
     }
-    tb_set_fg(t, c);
-    XFillPolygon(t->dpy, t->buf, t->gc, pts, 3, Convex, CoordModeOrigin);
+    tb_poly(t, pts, 3, c);
 }
 
 static inline void tb_sb_draw(tb_app *t, const tb_scroll *s) {

@@ -183,4 +183,43 @@ static inline void tb_doc_move_rows(tb_doc *d, int delta) {
     tb_doc_clamp_col(d);
 }
 
+/* Text between (r1,c1) and (r2,c2), lines joined by '\n'. Caller frees. */
+static inline char *tb_doc_range_text(const tb_doc *d, int r1, int c1, int r2, int c2) {
+    size_t total = 1;
+    for (int r = r1; r <= r2; r++) total += (size_t)d->lines[r].len + 1;
+    char *out = malloc(total);
+    if (!out) { fprintf(stderr, "toolbox: out of memory\n"); exit(1); }
+    char *p = out;
+    for (int r = r1; r <= r2; r++) {
+        int from = r == r1 ? c1 : 0;
+        int to = r == r2 ? c2 : d->lines[r].len;
+        if (to > from) {
+            memcpy(p, d->lines[r].s + from, (size_t)(to - from));
+            p += to - from;
+        }
+        if (r < r2) *p++ = '\n';
+    }
+    *p = 0;
+    return out;
+}
+
+/* Remove the text between (r1,c1) and (r2,c2); the cursor goes to (r1,c1). */
+static inline void tb_doc_delete_range(tb_doc *d, int r1, int c1, int r2, int c2) {
+    if (r1 == r2) {
+        tb_line *l = &d->lines[r1];
+        memmove(l->s + c1, l->s + c2, (size_t)(l->len - c2 + 1));
+        l->len -= c2 - c1;
+    } else {
+        tb_line *a = &d->lines[r1];
+        tb_line *b = &d->lines[r2];
+        int tail = b->len - c2;
+        a->len = c1;
+        a->s[c1] = 0;
+        tb_line_append(a, b->s + c2, tail);
+        for (int r = r2; r > r1; r--) tb_doc_remove_line(d, r);
+    }
+    d->row = r1;
+    d->col = c1;
+}
+
 #endif /* TB_DOC_H */

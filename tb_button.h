@@ -18,15 +18,24 @@ typedef struct tb_button {
 
 static inline void tb_button_draw(tb_app *t, tb_widget *wb, int focused) {
     tb_button *b = (tb_button *)wb;
-    (void)focused;
     int inv = b->pressed && b->inside;
     int bg = inv ? TB_C_FG : TB_C_BG;
     int fg = inv ? TB_C_BG : TB_C_FG;
     tb_fill(t, wb->x, wb->y, wb->w, wb->h, bg);
     for (int i = 0; i < TB_BUTTON_BORDER; i++)
         tb_frame(t, wb->x + i, wb->y + i, wb->w - 2 * i, wb->h - 2 * i, TB_C_FG);
+    if (focused)   /* keyboard focus: inner outline, as on the Mac default button */
+        tb_frame(t, wb->x + 4, wb->y + 4, wb->w - 8, wb->h - 8, TB_C_FG);
     int tw = tb_text_w(t, b->text);
     tb_str(t, wb->x + (wb->w - tw) / 2, tb_text_base(t, wb->y, wb->h), fg, b->text);
+}
+
+static inline void tb_button_key(tb_app *t, tb_widget *wb, XKeyEvent *e) {
+    KeySym ks = XLookupKeysym(e, 0);
+    if (ks == XK_space || ks == XK_Return || ks == XK_KP_Enter) {
+        tb_button *b = (tb_button *)wb;
+        if (b->cb) b->cb(t, b->data);
+    }
 }
 
 static inline int tb_button_press(tb_app *t, tb_widget *wb, int x, int y) {
@@ -60,7 +69,7 @@ static inline void tb_button_destroy(tb_widget *wb) {
 
 static const tb_wops TB_BUTTON_OPS = {
     tb_button_draw, tb_button_press, tb_button_motion, tb_button_release,
-    NULL, NULL, tb_button_destroy
+    NULL, tb_button_key, tb_button_destroy, NULL
 };
 
 static inline tb_button *tb_button_new(tb_app *t, int x, int y, int w, int h,
@@ -73,6 +82,7 @@ static inline tb_button *tb_button_new(tb_app *t, int x, int y, int w, int h,
     b->base.w = w;
     b->base.h = h;
     b->base.clickable = 1;
+    b->base.focusable = 1;
     b->text = tb_strdup(label);
     b->cb = cb;
     b->data = data;

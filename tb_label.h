@@ -24,7 +24,7 @@ static inline void tb_label_destroy(tb_widget *wb) {
 }
 
 static const tb_wops TB_LABEL_OPS = {
-    tb_label_draw, NULL, NULL, NULL, NULL, NULL, tb_label_destroy
+    tb_label_draw, NULL, NULL, NULL, NULL, NULL, tb_label_destroy, NULL
 };
 
 static inline tb_label *tb_label_new(tb_app *t, int x, int y, int color, const char *s) {
@@ -45,6 +45,7 @@ static inline void tb_label_set(tb_app *t, tb_label *l, const char *s) {
     free(l->text);
     l->text = tb_strdup(s);
     l->base.w = tb_text_w(t, s);
+    tb_damage(t, &l->base);
 }
 
 #endif /* TB_LABEL_H */

@@ -11,7 +11,15 @@
  * "open" callback. In tree mode, clicking a triangle (or Left/Right keys)
  * expands/collapses; the "expand" callback fires the first time a node is
  * opened, so directories can be read lazily.
+ *
+ * Sorting: click a column header to sort by that column (click again to
+ * reverse). Text columns compare case-insensitively; a column can instead
+ * compare numerically if the node was given a numeric key with
+ * tb_view_set_key(). Optionally, expandable nodes (folders) can be kept
+ * ahead of the others with tb_view_folders_first().
  */
+
+#include <ctype.h>
 
 #include "tb_core.h"
 #include "tb_scroll.h"
@@ -26,6 +34,9 @@ typedef struct tb_node {
     struct tb_node *parent;
     struct tb_node **kids;
     int nkids, ckids;
+    int nkeys;            /* numeric sort keys, one per column          */
+    double *keys;
+    char *haskey;
 } tb_node;
 
 typedef struct tb_view {
@@ -40,6 +51,9 @@ typedef struct tb_view {
     tb_node *selected;
     tb_node *pending;     /* node being expanded inside on_expand       */
     tb_scroll sb;
+    int sort_col;         /* -1 = unsorted                              */
+    int sort_desc;
+    int folders_first;
     tb_action on_select, on_open, on_expand;
     void *select_data, *open_data, *expand_data;
     unsigned long click_time;
@@ -70,6 +84,58 @@ static inline void tb_view_fit(tb_app *t, const char *s, int maxw, char *out, si
         out[--len] = 0;
 }
 
+/* ---- sorting helpers ---------------------------------------------------- */
+
+/* Case-insensitive string comparison. */
+static inline int tb_str_cmpi(const char *a, const char *b) {
+    while (*a && *b) {
+        int ca = tolower((unsigned char)*a), cb = tolower((unsigned char)*b);
+        if (ca != cb) return ca - cb;
+        a++; b++;
+    }
+    return tolower((unsigned char)*a) - tolower((unsigned char)*b);
+}
+
+static inline const char *tb_node_cell(const tb_node *n, int col) {
+    return col < n->ncells ? n->cells[col] : "";
+}
+
+/* The view whose siblings are being sorted; read by tb_node_cmp. */
+static tb_view *tb_sort_view = NULL;
+
+static inline int tb_node_cmp(const void *pa, const void *pb) {
+    const tb_node *a = *(tb_node *const *)pa, *b = *(tb_node *const *)pb;
+    const tb_view *v = tb_sort_view;
+    if (v->folders_first && a->expandable != b->expandable)
+        return b->expandable - a->expandable;   /* folders first, never reversed */
+    int c = 0;
+    if (v->sort_col >= 0) {
+        int col = v->sort_col;
+        if (col < a->nkeys && col < b->nkeys && a->haskey[col] && b->haskey[col])
+            c = a->keys[col] < b->keys[col] ? -1 : (a->keys[col] > b->keys[col]);
+        else
+            c = tb_str_cmpi(tb_node_cell(a, col), tb_node_cell(b, col));
+        if (v->sort_desc) c = -c;
+    }
+    if (c == 0) c = tb_str_cmpi(tb_node_cell(a, 0), tb_node_cell(b, 0));
+    return c;
+}
+
+static inline int tb_view_sorting(const tb_view *v) {
+    return v->sort_col >= 0 || v->folders_first;
+}
+
+static inline void tb_view_sort_kids(tb_view *v, tb_node *p) {
+    if (!tb_view_sorting(v) || p->nkids < 2) return;
+    tb_sort_view = v;
+    qsort(p->kids, (size_t)p->nkids, sizeof *p->kids, tb_node_cmp);
+}
+
+static inline void tb_view_sort_all(tb_view *v, tb_node *p) {
+    tb_view_sort_kids(v, p);
+    for (int i = 0; i < p->nkids; i++) tb_view_sort_all(v, p->kids[i]);
+}
+
 /* ---- flattening and node management ----------------------------------- */
 
 static inline void tb_view_collect(tb_view *v, const tb_node *p) {
@@ -91,6 +157,8 @@ static inline void tb_node_free(tb_node *n) {
     free(n->cells);
     for (int i = 0; i < n->nkids; i++) tb_node_free(n->kids[i]);
     free(n->kids);
+    free(n->keys);
+    free(n->haskey);
     free(n);
 }
 
@@ -116,6 +184,10 @@ static inline tb_node *tb_view_add(tb_view *v, tb_node *parent, const char **cel
     nd->cells = calloc(n > 0 ? (size_t)n : 1, sizeof *nd->cells);
     if (!nd->cells) tb_oom();
     for (int i = 0; i < n; i++) nd->cells[i] = tb_strdup(cells[i]);
+    nd->nkeys = v->ncols;
+    nd->keys = calloc(v->ncols > 0 ? (size_t)v->ncols : 1, sizeof *nd->keys);
+    nd->haskey = calloc(v->ncols > 0 ? (size_t)v->ncols : 1, sizeof *nd->haskey);
+    if (!nd->keys || !nd->haskey) tb_oom();
     nd->depth = parent->depth + 1;
     nd->parent = parent;
     nd->expandable = expandable;
@@ -123,8 +195,16 @@ static inline tb_node *tb_view_add(tb_view *v, tb_node *parent, const char **cel
     tb_node **slot = tb_push((void **)&parent->kids, &parent->nkids,
                              &parent->ckids, sizeof *slot);
     *slot = nd;
+    tb_view_sort_kids(v, parent);
     tb_view_flatten(v);
     return nd;
+}
+
+/* Give a node a numeric sort key for one column (e.g. a file size). */
+static inline void tb_view_set_key(tb_node *n, int col, double value) {
+    if (col < 0 || col >= n->nkeys) return;
+    n->keys[col] = value;
+    n->haskey[col] = 1;
 }
 
 static inline void tb_view_clear(tb_view *v) {
@@ -135,6 +215,21 @@ static inline void tb_view_clear(tb_view *v) {
     v->selected = NULL;
     v->pending = NULL;
     v->click_node = NULL;
+    tb_view_flatten(v);
+}
+
+/* Sort by a column (-1 = none). Changes the order of every level. */
+static inline void tb_view_sort(tb_view *v, int col, int desc) {
+    v->sort_col = col;
+    v->sort_desc = desc ? 1 : 0;
+    tb_view_sort_all(v, &v->root);
+    tb_view_flatten(v);
+}
+
+/* Keep expandable nodes (folders) before the rest. */
+static inline void tb_view_folders_first(tb_view *v, int on) {
+    v->folders_first = on ? 1 : 0;
+    tb_view_sort_all(v, &v->root);
     tb_view_flatten(v);
 }
 
@@ -216,8 +311,7 @@ static inline void tb_view_draw(tb_app *t, tb_widget *wb, int focused) {
     tb_fill(t, wb->x, wb->y, wb->w, wb->h, TB_C_BG);
 
     /* body rows, clipped to the body rectangle */
-    XRectangle clip = { (short)bx, (short)by, (unsigned short)bw, (unsigned short)bh };
-    XSetClipRectangles(t->dpy, t->gc, 0, 0, &clip, 1, Unsorted);
+    tb_clip_rect(t, bx, by, bw, bh);
     int top = v->sb.value, page = v->sb.page;
     for (int r = top; r < v->nrows && r - top <= page; r++) {
         tb_node *n = v->rows[r];
@@ -243,19 +337,25 @@ static inline void tb_view_draw(tb_app *t, tb_widget *wb, int focused) {
             x0 += v->widths[c];
         }
     }
-    XSetClipMask(t->dpy, t->gc, None);
+    tb_clip_reset(t);
 
     tb_sb_draw(t, &v->sb);
     tb_fill(t, v->sb.x, wb->y, TB_SCROLL_W, rh, TB_C_BG);
 
-    /* column header */
+    /* column header, with a sort indicator on the sorted column */
     tb_hline(t, wb->x, wb->x + wb->w - 1, wb->y + rh, TB_C_FG);
     int cx = bx;
     for (int c = 0; c < v->ncols; c++) {
+        int sorted = (c == v->sort_col);
+        int right = cx + v->widths[c];
         char buf[256];
-        tb_view_fit(t, v->titles[c], v->widths[c] - 2 * TB_CELL_PAD, buf, sizeof buf);
+        tb_view_fit(t, v->titles[c],
+                    v->widths[c] - 2 * TB_CELL_PAD - (sorted ? 14 : 0), buf, sizeof buf);
         tb_str(t, cx + TB_CELL_PAD, tb_text_base(t, wb->y, rh), TB_C_FG, buf);
-        cx += v->widths[c];
+        if (sorted)
+            tb_sb_arrow(t, right - 13, wb->y + (rh - 10) / 2, 10,
+                        v->sort_desc ? 1 : 0, TB_C_FG);
+        cx = right;
         if (c + 1 < v->ncols && cx < bx + bw)
             tb_vline(t, cx, wb->y + 1, wb->y + rh - 1, TB_C_FG);
     }
@@ -275,6 +375,19 @@ static inline int tb_view_row_at(tb_app *t, tb_view *v, int x, int y, tb_node **
     return r;
 }
 
+/* Column index under x in the header, or -1. */
+static inline int tb_view_col_at(tb_app *t, tb_view *v, int x) {
+    int bx, by, bw, bh;
+    tb_view_rects(t, &v->base, &bx, &by, &bw, &bh);
+    (void)t;
+    int acc = bx;
+    for (int c = 0; c < v->ncols; c++) {
+        if (x >= acc && x < acc + v->widths[c]) return c;
+        acc += v->widths[c];
+    }
+    return -1;
+}
+
 static inline int tb_view_press(tb_app *t, tb_widget *wb, int x, int y) {
     tb_view *v = (tb_view *)wb;
     tb_view_sync(t, v);
@@ -283,15 +396,23 @@ static inline int tb_view_press(tb_app *t, tb_widget *wb, int x, int y) {
         return 1;                       /* grab for thumb drags */
     }
 
+    /* header click: sort by that column */
+    if (y < wb->y + tb_view_rowh(t)) {
+        int c = tb_view_col_at(t, v, x);
+        if (c >= 0) {
+            if (v->sort_col == c) tb_view_sort(v, c, !v->sort_desc);
+            else tb_view_sort(v, c, 0);
+        }
+        return 0;
+    }
+
     tb_node *n = NULL;
     int r = tb_view_row_at(t, v, x, y, &n);
     if (r < 0) return 0;
 
     /* disclosure triangle? */
     if (tb_view_has_tri(v, n)) {
-        int bx, by, bw, bh;
-        tb_view_rects(t, wb, &bx, &by, &bw, &bh);
-        int tx = bx + TB_CELL_PAD + n->depth * TB_TREE_INDENT;
+        int tx = wb->x + 1 + TB_CELL_PAD + n->depth * TB_TREE_INDENT;
         if (x >= tx && x < tx + TB_TREE_DISC) {
             tb_view_expand(t, v, n, !n->expanded);
             return 0;
@@ -399,7 +520,7 @@ static inline void tb_view_destroy(tb_widget *wb) {
 
 static const tb_wops TB_VIEW_OPS = {
     tb_view_draw, tb_view_press, tb_view_motion, tb_view_release,
-    tb_view_wheel, tb_view_key, tb_view_destroy
+    tb_view_wheel, tb_view_key, tb_view_destroy, NULL
 };
 
 /* Use tb_list_new() or tb_tree_new() rather than calling this directly. */
@@ -417,6 +538,7 @@ static inline tb_view *tb_view_new(tb_app *t, int x, int y, int w, int h,
     v->base.focusable = 1;
     v->tree = tree ? 1 : 0;
     v->ncols = ncols;
+    v->sort_col = -1;
     v->titles = calloc((size_t)ncols, sizeof *v->titles);
     v->widths = calloc((size_t)ncols, sizeof *v->widths);
     if (!v->titles || !v->widths) tb_oom();

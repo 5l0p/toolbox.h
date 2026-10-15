@@ -49,7 +49,7 @@ static inline void tb_scrollbar_destroy(tb_widget *wb) {
 
 static const tb_wops TB_SCROLLBAR_OPS = {
     tb_scrollbar_draw, tb_scrollbar_press, tb_scrollbar_motion,
-    tb_scrollbar_release, tb_scrollbar_wheel, NULL, tb_scrollbar_destroy
+    tb_scrollbar_release, tb_scrollbar_wheel, NULL, tb_scrollbar_destroy, NULL
 };
 
 static inline tb_scrollbar *tb_scrollbar_new(tb_app *t, int x, int y, int w, int h,
@@ -81,6 +81,7 @@ static inline void tb_scrollbar_set(tb_scrollbar *s, int total, int page, int va
     tb_sb_set(&s->sb, total, page);
     s->sb.value = value;
     tb_sb_clamp(&s->sb);
+    if (s->base.app) tb_damage(s->base.app, &s->base);
 }
 
 static inline int tb_scrollbar_get(const tb_scrollbar *s) {
