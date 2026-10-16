@@ -14,34 +14,12 @@ HDRS = config.h toolbox.h tb_core.h tb_clip.h tb_doc.h tb_scroll.h tb_menu.h \
 LUA_DIR = lua-5.5.0
 LUA_OBJ = $(LUA_DIR)/onelua.o
 
-all: demo textedit filebrowser controls gallery teletype tb_lua
+all: demo 
 
-# Lua core and libraries as one object (onelua.c without its main()).
-$(LUA_OBJ): $(LUA_DIR)/onelua.c
-	$(CC) -O2 -DMAKE_LIB -DLUA_USE_LINUX -c -o $@ $<
-
-tb_lua: tb_lua.c $(HDRS) $(LUA_OBJ)
-	$(CC) $(CFLAGS) -I$(LUA_DIR) -o $@ tb_lua.c $(LUA_OBJ) $(LDFLAGS) $(LDLIBS) -lm -ldl
-
-demo: main.c $(HDRS)
-	$(CC) $(CFLAGS) -o $@ main.c $(LDFLAGS) $(LDLIBS)
-
-textedit: textedit.c $(HDRS)
-	$(CC) $(CFLAGS) -o $@ textedit.c $(LDFLAGS) $(LDLIBS)
-
-filebrowser: filebrowser.c $(HDRS)
-	$(CC) $(CFLAGS) -o $@ filebrowser.c $(LDFLAGS) $(LDLIBS)
-
-controls: controls.c $(HDRS)
-	$(CC) $(CFLAGS) -o $@ controls.c $(LDFLAGS) $(LDLIBS)
-
-gallery: gallery.c $(HDRS)
-	$(CC) $(CFLAGS) -o $@ gallery.c $(LDFLAGS) $(LDLIBS)
-
-teletype: teletype.c $(HDRS)
-	$(CC) $(CFLAGS) -o $@ teletype.c $(LDFLAGS) $(LDLIBS)
+demo: demo.c $(HDRS)
+	$(CC) $(CFLAGS) -o $@ demo.c $(LDFLAGS) $(LDLIBS)
 
 clean:
-	rm -f demo textedit filebrowser controls gallery teletype catclock tb_lua $(LUA_OBJ)
+	rm -f demo 
 
 .PHONY: all clean
