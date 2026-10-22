@@ -56,24 +56,37 @@ static inline void tb_menu_close(tb_app *t) {
     t->open_item = -1;
 }
 
-static inline void tb_menu_new(tb_app *t, const char *title) {
+/* Returns the menu's index. */
+static inline int tb_menu_new(tb_app *t, const char *title) {
     tb_menu *m = tb_push((void **)&t->menus, &t->nmenus, &t->cmenus, sizeof *m);
     m->title = tb_strdup(title);
     tb_menu_layout(t);
+    return t->nmenus - 1;
 }
 
-/* Title "-" makes a separator. */
-static inline void tb_menu_item(tb_app *t, const char *title, tb_action cb, void *data) {
-    if (t->nmenus == 0) return;
+/* Title "-" makes a separator. Returns the item's index in its menu, or -1. */
+static inline int tb_menu_item(tb_app *t, const char *title, tb_action cb, void *data) {
+    if (t->nmenus == 0) return -1;
     tb_menu *m = &t->menus[t->nmenus - 1];
     tb_item *it = tb_push((void **)&m->items, &m->nitems, &m->citems, sizeof *it);
     it->title = strcmp(title, "-") == 0 ? NULL : tb_strdup(title);
     it->cb = cb;
     it->data = data;
     tb_menu_layout(t);
+    return m->nitems - 1;
+}
+
+/* Change the text of an existing item ("-" makes it a separator). Use this
+ * for toggles, e.g. "Show Hidden Files" <-> "Hide Hidden Files". */
+static inline void tb_menu_set_item(tb_app *t, int menu, int item, const char *title) {
+    tb_item *it = &t->menus[menu].items[item];
+    free(it->title);
+    it->title = strcmp(title, "-") == 0 ? NULL : tb_strdup(title);
+    tb_menu_layout(t);
 }
 
 static inline void tb_menu_draw_bar(tb_app *t) {
+    tb_fill(t, 0, 0, t->width, TB_MENUBAR_H, TB_C_MENUBAR);
     tb_hline(t, 0, t->width - 1, TB_MENUBAR_H - 1, TB_C_FG);
     for (int i = 0; i < t->nmenus; i++) {
         tb_menu *m = &t->menus[i];

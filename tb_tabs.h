@@ -124,4 +124,23 @@ static inline int tb_tabs_get(const tb_tabs *tb) {
     return tb->cur;
 }
 
+/* Change the title of tab i. */
+static inline void tb_tabs_rename(tb_tabs *tb, int i, const char *title) {
+    if (i < 0 || i >= tb->n) return;
+    free(tb->titles[i]);
+    tb->titles[i] = tb_strdup(title);
+    if (tb->base.app) tb_damage(tb->base.app, &tb->base);
+}
+
+/* Remove tab i. The selection stays on the same index, or the last tab. */
+static inline void tb_tabs_remove(tb_tabs *tb, int i) {
+    if (i < 0 || i >= tb->n) return;
+    free(tb->titles[i]);
+    memmove(&tb->titles[i], &tb->titles[i + 1],
+            (size_t)(tb->n - i - 1) * sizeof *tb->titles);
+    tb->n--;
+    if (tb->cur >= tb->n) tb->cur = tb->n > 0 ? tb->n - 1 : 0;
+    if (tb->base.app) tb_damage(tb->base.app, &tb->base);
+}
+
 #endif /* TB_TABS_H */

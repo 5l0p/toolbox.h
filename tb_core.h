@@ -43,6 +43,24 @@
 
 #include "config.h"
 
+/* Upper bound on palette entries; the palette itself sets the real count. */
+#define TB_MAX_COLORS 32
+
+/* Colour roles used by the widgets. A config may override any of these;
+ * the fallbacks keep the default look. */
+#ifndef TB_C_MENUBAR
+#define TB_C_MENUBAR      TB_C_BG      /* menubar strip background */
+#endif
+#ifndef TB_C_STATUS_BG
+#define TB_C_STATUS_BG    TB_C_BG      /* status bar background    */
+#endif
+#ifndef TB_C_STATUS_FG
+#define TB_C_STATUS_FG    TB_C_FG      /* status bar text          */
+#endif
+#ifndef TB_C_SCROLL_THUMB
+#define TB_C_SCROLL_THUMB TB_C_BG      /* scroll bar thumb (not while dragged) */
+#endif
+
 typedef struct tb_app tb_app;
 typedef struct tb_widget tb_widget;
 typedef struct tb_dialog tb_dialog;
@@ -119,7 +137,7 @@ struct tb_app {
     GC gc;
     XFontStruct *font;
     int fascent, fdescent;
-    unsigned long pix[16];
+    unsigned long pix[TB_MAX_COLORS];
     Atom wm_delete;
     int width, height;
 
@@ -136,6 +154,7 @@ struct tb_app {
     tb_widget *grab;      /* receives motion/release while non-NULL */
     tb_widget *overlay;   /* widget whose overlay is drawn on top   */
     unsigned long event_time; /* timestamp of the current press (ms) */
+    int ptr_x, ptr_y;     /* pointer position of the latest button event */
     int running;
 
     /* drawing state */
@@ -368,10 +387,19 @@ static inline int tb_in_root(const tb_app *t, const tb_widget *w) {
     return 0;
 }
 
-/* Mark a widget's area as needing a repaint. Widgets inside containers
- * (dialogs, scroll windows) or while a dialog is up cause a full repaint. */
+static inline int tb_in_container(const tb_container *c, const tb_widget *w) {
+    for (int i = 0; i < c->n; i++)
+        if (c->kids[i] == w) return 1;
+    return 0;
+}
+
+/* Mark a widget's area as needing a repaint. Direct children of the
+ * active container (the open dialog, or the root) repaint only their own
+ * rectangle. Anything nested in a scroll window, or drawn as an overlay,
+ * causes a full repaint. */
 static inline void tb_damage(tb_app *t, tb_widget *w) {
-    if (!t->ox && !t->oy && !t->modal && tb_in_root(t, w))
+    int direct = t->modal ? tb_in_container(&t->modal->c, w) : tb_in_root(t, w);
+    if (!t->ox && !t->oy && direct)
         tb_damage_rect(t, w->x, w->y, w->w, w->h);
     else
         tb_damage_all(t);

@@ -13,9 +13,9 @@ typedef struct tb_status {
 static inline void tb_status_draw(tb_app *t, tb_widget *wb, int focused) {
     tb_status *s = (tb_status *)wb;
     (void)focused;
-    tb_fill(t, wb->x, wb->y, wb->w, wb->h, TB_C_BG);
+    tb_fill(t, wb->x, wb->y, wb->w, wb->h, TB_C_STATUS_BG);
     tb_frame(t, wb->x, wb->y, wb->w, wb->h, TB_C_FG);
-    tb_str(t, wb->x + 6, tb_text_base(t, wb->y, wb->h), TB_C_FG, s->text);
+    tb_str(t, wb->x + 6, tb_text_base(t, wb->y, wb->h), TB_C_STATUS_FG, s->text);
 }
 
 static inline void tb_status_destroy(tb_widget *wb) {

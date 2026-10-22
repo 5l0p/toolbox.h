@@ -25,6 +25,8 @@
  *   tb_view.h        multi-column row engine
  *   tb_list.h        flat list                 tb_list_new
  *   tb_tree.h        tree                      tb_tree_new
+ *   tb_miller.h      Miller columns            tb_miller_new / tb_miller_add
+ *   tb_split.h       horizontal splitter       tb_split_new
  *   tb_slider.h      slider                    tb_slider_new
  *   tb_progress.h    progress bar              tb_progress_new
  *   tb_spin.h        spin box                  tb_spin_new
@@ -50,6 +52,8 @@
 #include "tb_view.h"
 #include "tb_list.h"
 #include "tb_tree.h"
+#include "tb_miller.h"
+#include "tb_split.h"
 #include "tb_check.h"
 #include "tb_radio.h"
 #include "tb_group.h"
@@ -87,9 +91,10 @@ static inline tb_app *tb_app_new(const char *title, int width, int height) {
     }
     t->screen = DefaultScreen(t->dpy);
 
-    /* colours: parse and allocate the 16-entry palette */
+    /* colours: parse and allocate the palette */
     Colormap cm = DefaultColormap(t->dpy, t->screen);
-    for (int i = 0; i < 16; i++) {
+    int ncolors = (int)(sizeof tb_palette / sizeof tb_palette[0]);
+    for (int i = 0; i < ncolors; i++) {
         XColor c;
         if (!XParseColor(t->dpy, cm, tb_palette[i], &c) ||
             !XAllocColor(t->dpy, cm, &c)) {
@@ -249,6 +254,8 @@ static inline void tb_draw(tb_app *t) {
 
 static inline void tb_on_press(tb_app *t, XButtonEvent *e) {
     tb_container *c = tb_active(t);
+    t->ptr_x = e->x;
+    t->ptr_y = e->y;
     if (e->button == Button4 || e->button == Button5) {
         tb_widget *w = tb_hit_in(c, e->x, e->y);
         if (w && w->ops->wheel) {
@@ -313,7 +320,10 @@ static inline void tb_on_key(tb_app *t, XKeyEvent *e) {
     }
     if (ks == XK_Tab || ks == XK_ISO_Left_Tab) {
         tb_focus_step(t, c, (e->state & ShiftMask) ? -1 : 1);
-        tb_damage_all(t);
+        if (t->modal)   /* focus only moves inside the dialog */
+            tb_damage_rect(t, t->modal->x, t->modal->y, t->modal->w, t->modal->h);
+        else
+            tb_damage_all(t);
         return;
     }
 
@@ -475,7 +485,7 @@ static inline void tb_pump(tb_app *t) {
             return;
         }
     }
-    int was = t->overlay != NULL || t->open_menu >= 0 || t->modal != NULL;
+    int was = t->overlay != NULL || t->open_menu >= 0;
     XNextEvent(t->dpy, &ev);
     switch (ev.type) {
     case Expose:
@@ -511,9 +521,9 @@ static inline void tb_pump(tb_app *t) {
     default:
         break;
     }
-    /* Menus, popups and dialogs paint over the window: repaint it all
-     * when any of them was or is open. */
-    if (was || t->overlay || t->open_menu >= 0 || t->modal)
+    /* Menus and popups paint over the window, so repaint it all while one
+     * is open or has just closed. Dialogs are handled by tb_damage(). */
+    if (was || t->overlay || t->open_menu >= 0)
         tb_damage_all(t);
     tb_draw(t);
 }

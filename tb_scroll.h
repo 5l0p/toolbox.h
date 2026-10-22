@@ -161,7 +161,7 @@ static inline void tb_sb_draw(tb_app *t, const tb_scroll *s) {
     int ty = s->vertical ? s->y + off : s->y + 1;
     int tw = s->vertical ? s->w - 2 : tl;
     int th = s->vertical ? tl : s->h - 2;
-    tb_fill(t, tx, ty, tw, th, s->dragging ? TB_C_FG : TB_C_BG);
+    tb_fill(t, tx, ty, tw, th, s->dragging ? TB_C_FG : TB_C_SCROLL_THUMB);
     tb_frame(t, tx, ty, tw, th, TB_C_FG);
 }
 
