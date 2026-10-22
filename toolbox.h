@@ -27,6 +27,7 @@
  *   tb_tree.h        tree                      tb_tree_new
  *   tb_miller.h      Miller columns            tb_miller_new / tb_miller_add
  *   tb_split.h       horizontal splitter       tb_split_new
+ *   tb_grid.h        spreadsheet grid          tb_grid_new / tb_grid_set
  *   tb_slider.h      slider                    tb_slider_new
  *   tb_progress.h    progress bar              tb_progress_new
  *   tb_spin.h        spin box                  tb_spin_new
@@ -54,6 +55,7 @@
 #include "tb_tree.h"
 #include "tb_miller.h"
 #include "tb_split.h"
+#include "tb_grid.h"
 #include "tb_check.h"
 #include "tb_radio.h"
 #include "tb_group.h"
@@ -302,6 +304,12 @@ static inline void tb_on_release(tb_app *t, XButtonEvent *e) {
         tb_damage_all(t);
 }
 
+/* Tab goes to a focused widget that takes it (text views, grids); Shift+Tab
+ * always moves focus. */
+static inline int tb_tab_in_editor(const tb_container *c, const XKeyEvent *e) {
+    return c->focus && c->focus->takes_tab && !(e->state & ShiftMask);
+}
+
 static inline void tb_on_key(tb_app *t, XKeyEvent *e) {
     KeySym ks = XLookupKeysym(e, 0);
     tb_container *c = tb_active(t);
@@ -318,7 +326,7 @@ static inline void tb_on_key(tb_app *t, XKeyEvent *e) {
             return;
         }
     }
-    if (ks == XK_Tab || ks == XK_ISO_Left_Tab) {
+    if ((ks == XK_Tab || ks == XK_ISO_Left_Tab) && !tb_tab_in_editor(c, e)) {
         tb_focus_step(t, c, (e->state & ShiftMask) ? -1 : 1);
         if (t->modal)   /* focus only moves inside the dialog */
             tb_damage_rect(t, t->modal->x, t->modal->y, t->modal->w, t->modal->h);

@@ -93,6 +93,7 @@ struct tb_widget {
     int clickable;        /* gets pointer events                    */
     int focusable;        /* becomes focused when pressed           */
     int hidden;           /* not drawn, not hit, not focusable      */
+    int takes_tab;        /* Tab goes to this widget, not to focus navigation */
     tb_app *app;          /* set when the widget is added           */
     /* Text insertion (typed-in text from the clipboard), or NULL. */
     void (*text_in)(tb_app *app, tb_widget *w, const char *s, int n);

@@ -12,7 +12,8 @@
  *   BackSpace, Delete
  *   Ctrl-A / X / C / V      select all / cut / copy / paste (CLIPBOARD)
  *
- * ASCII only (columns are bytes). Tab moves focus, so tabs cannot be typed.
+ * ASCII only (columns are bytes). Tab inserts a tab character, shown
+ * up to the next TB_TAB_WIDTH (4) column stop. Shift+Tab moves focus.
  * tb_textview_on_update() is called after every edit, click and caret move.
  */
 
@@ -58,10 +59,53 @@ static inline int tb_tv_line_h(tb_app *t) {
     return lh < 1 ? 1 : lh;
 }
 
+/* Tabs advance to the next multiple of TB_TAB_WIDTH columns. Columns are
+ * counted from the start of the string passed in, so a wrapped row's tabs
+ * are measured from that row's start. */
+#ifndef TB_TAB_WIDTH
+#define TB_TAB_WIDTH 4
+#endif
+
+/* Draw s[0..n) at x (when draw is non-zero) and return the x after it.
+ * Runs of ordinary text are drawn with XDrawString; each '\t' moves to the
+ * next tab stop. With draw == 0 this only measures. */
+static inline int tb_tv_run(tb_app *t, int x, int base, int c, const char *s, int n, int draw) {
+    int sw = XTextWidth(t->font, " ", 1);
+    int col = 0, start = 0;
+    for (int i = 0; i <= n; i++) {
+        if (i < n && s[i] != '\t') continue;
+        int len = i - start;
+        if (len > 0) {
+            if (draw) {
+                tb_set_fg(t, c);
+                XDrawString(t->dpy, t->buf, t->gc, x + t->ox, base + t->oy, s + start, len);
+            }
+            x += XTextWidth(t->font, s + start, len);
+            col += len;
+        }
+        if (i < n) {
+            int sp = TB_TAB_WIDTH - col % TB_TAB_WIDTH;
+            x += sp * sw;
+            col += sp;
+            start = i + 1;
+        }
+    }
+    return x;
+}
+
+/* Width in pixels of s[0..n), with tab stops. */
+static inline int tb_tv_px(tb_app *t, const char *s, int n) {
+    return tb_tv_run(t, 0, 0, 0, s, n, 0);
+}
+
+static inline void tb_tv_seg(tb_app *t, int x, int base, int c, const char *s, int n) {
+    tb_tv_run(t, x, base, c, s, n, 1);
+}
+
 static inline int tb_tv_maxw(tb_app *t, const tb_doc *d) {
     int m = 0;
     for (int i = 0; i < d->n; i++) {
-        int w = XTextWidth(t->font, d->lines[i].s, d->lines[i].len);
+        int w = tb_tv_px(t, d->lines[i].s, d->lines[i].len);
         if (w > m) m = w;
     }
     return m;
@@ -78,7 +122,7 @@ static inline void tb_tv_layout(tb_app *t, tb_textview *tv, int cw) {
         for (;;) {
             int end = start, brk = -1;
             while (end < l->len &&
-                   XTextWidth(t->font, l->s + start, end + 1 - start) <= cw) {
+                   tb_tv_px(t, l->s + start, end + 1 - start) <= cw) {
                 if (l->s[end] == ' ') brk = end + 1;
                 end++;
             }
@@ -135,7 +179,7 @@ static inline void tb_tv_ensure_cursor(tb_app *t, tb_textview *tv) {
     if (tv->wrap) return;
 
     tb_line *l = &tv->doc.lines[row];
-    int px = XTextWidth(t->font, l->s, tv->doc.col);
+    int px = tb_tv_px(t, l->s, tv->doc.col);
     if (px < h->value) h->value = px;
     else if (px + TB_SCROLL_STEP > h->value + h->page)
         h->value = px + TB_SCROLL_STEP - h->page;
@@ -154,7 +198,7 @@ static inline void tb_tv_click(tb_app *t, tb_textview *tv, int x, int y) {
         const tb_line *l = &tv->doc.lines[vr->r];
         int xr = x - cx, best = vr->c0, bestd = -1;
         for (int c = vr->c0; c <= vr->c1; c++) {
-            int d = XTextWidth(t->font, l->s + vr->c0, c - vr->c0) - xr;
+            int d = tb_tv_px(t, l->s + vr->c0, c - vr->c0) - xr;
             if (d < 0) d = -d;
             if (bestd < 0 || d < bestd) { bestd = d; best = c; }
         }
@@ -169,7 +213,7 @@ static inline void tb_tv_click(tb_app *t, tb_textview *tv, int x, int y) {
     int xr = x - cx + tv->sb[1].value;
     int best = 0, bestd = -1;
     for (int c = 0; c <= l->len; c++) {
-        int d = XTextWidth(t->font, l->s, c) - xr;
+        int d = tb_tv_px(t, l->s, c) - xr;
         if (d < 0) d = -d;
         if (bestd < 0 || d < bestd) { bestd = d; best = c; }
     }
@@ -212,10 +256,6 @@ static inline void tb_tv_notify(tb_app *t, tb_textview *tv) {
 
 /* ---- drawing ----------------------------------------------------------- */
 
-static inline void tb_tv_seg(tb_app *t, int x, int base, int c, const char *s, int n) {
-    tb_set_fg(t, c);
-    XDrawString(t->dpy, t->buf, t->gc, x + t->ox, base + t->oy, s, n);
-}
 
 /* Word-wrap drawing: one visual row per line, no horizontal offset. */
 static inline void tb_tv_draw_wrap(tb_app *t, tb_textview *tv, tb_widget *wb, int focused) {
@@ -251,8 +291,8 @@ static inline void tb_tv_draw_wrap(tb_app *t, tb_textview *tv, tb_widget *wb, in
             int a = s0 > vr->c0 ? s0 : vr->c0;
             int b = e0 < vr->c1 ? e0 : vr->c1;
             int brk = vr->r != r2 && vr->c1 == l->len;   /* line break selected */
-            int x1 = cx + XTextWidth(t->font, l->s + vr->c0, a - vr->c0);
-            int x2 = cx + XTextWidth(t->font, l->s + vr->c0, b - vr->c0);
+            int x1 = cx + tb_tv_px(t, l->s + vr->c0, a - vr->c0);
+            int x2 = cx + tb_tv_px(t, l->s + vr->c0, b - vr->c0);
             if (brk) x2 += t->fascent / 2 + 2;
             if (x2 <= x1) continue;
             int y0 = cy + (i - top) * lh;
@@ -269,7 +309,7 @@ static inline void tb_tv_draw_wrap(tb_app *t, tb_textview *tv, tb_widget *wb, in
         if (i >= top && i <= top + page) {
             const tb_vrow *vr = &tv->vrows[i];
             const tb_line *l = &tv->doc.lines[vr->r];
-            int px = cx + XTextWidth(t->font, l->s + vr->c0, tv->doc.col - vr->c0);
+            int px = cx + tb_tv_px(t, l->s + vr->c0, tv->doc.col - vr->c0);
             int y0 = cy + (i - top) * lh;
             tb_vline(t, px, y0, y0 + lh - 1, TB_C_FG);
         }
@@ -302,7 +342,7 @@ static inline void tb_tv_draw(tb_app *t, tb_widget *wb, int focused) {
 
     for (int r = top; r < tv->doc.n && r - top <= page; r++) {
         int base = cy + (r - top) * lh + t->fascent;
-        tb_str(t, cx - hx, base, TB_C_FG, tv->doc.lines[r].s);
+        tb_tv_seg(t, cx - hx, base, TB_C_FG, tv->doc.lines[r].s, (int)strlen(tv->doc.lines[r].s));
     }
 
     /* selected parts of the visible lines: inverted background and text */
@@ -312,15 +352,15 @@ static inline void tb_tv_draw(tb_app *t, tb_widget *wb, int focused) {
             tb_line *l = &tv->doc.lines[r];
             int sc = r == r1 ? c1 : 0;
             int ec = r == r2 ? c2 : l->len;
-            int x1 = cx - hx + XTextWidth(t->font, l->s, sc);
-            int x2 = cx - hx + XTextWidth(t->font, l->s, ec);
+            int x1 = cx - hx + tb_tv_px(t, l->s, sc);
+            int x2 = cx - hx + tb_tv_px(t, l->s, ec);
             /* a selected line break shows as a small extra block */
             if (r != r2) x2 += t->fascent / 2 + 2;
             int y0 = cy + (r - top) * lh;
             if (x2 <= x1) continue;
             tb_clip_rect(t, x1, y0, x2 - x1, lh);
             tb_fill(t, x1, y0, x2 - x1, lh, TB_C_SEL_BG);
-            tb_str(t, cx - hx, y0 + t->fascent, TB_C_SEL_FG, l->s);
+            tb_tv_seg(t, cx - hx, y0 + t->fascent, TB_C_SEL_FG, l->s, (int)strlen(l->s));
             tb_clip_rect(t, cx, cy, cw, ch);
         }
     }
@@ -329,7 +369,7 @@ static inline void tb_tv_draw(tb_app *t, tb_widget *wb, int focused) {
         int r = tv->doc.row;
         if (r >= top && r - top <= page) {
             tb_line *l = &tv->doc.lines[r];
-            int px = cx - hx + XTextWidth(t->font, l->s, tv->doc.col);
+            int px = cx - hx + tb_tv_px(t, l->s, tv->doc.col);
             int y0 = cy + (r - top) * lh;
             tb_vline(t, px, y0, y0 + lh - 1, TB_C_FG);
         }
@@ -485,6 +525,11 @@ static inline void tb_tv_key(tb_app *t, tb_widget *wb, XKeyEvent *e) {
         }
         if (!shift) tb_tv_collapse(tv);
         break;
+    case XK_Tab:
+        tb_tv_delete_sel(tv);
+        tb_doc_insert_char(d, '\t');
+        edited = 1;
+        break;
     default:
         if (n == 1 && buf[0] >= 32 && buf[0] < 127) {
             tb_tv_delete_sel(tv);
@@ -510,7 +555,7 @@ static inline void tb_tv_text_in(tb_app *t, tb_widget *wb, const char *s, int n)
     for (int i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
         if (c == '\n' || c == '\r') tb_doc_newline(&tv->doc);
-        else if (c >= 32 && c < 127) tb_doc_insert_char(&tv->doc, (char)c);
+        else if (c == '\t' || (c >= 32 && c < 127)) tb_doc_insert_char(&tv->doc, (char)c);
     }
     tb_tv_collapse(tv);
     tv->modified = 1;
@@ -555,6 +600,7 @@ static inline tb_textview *tb_textview_new(tb_app *t, int x, int y, int w, int h
     tv->base.h = h;
     tv->base.clickable = 1;
     tv->base.focusable = 1;
+    tv->base.takes_tab = 1;
     tv->grab_sb = -1;
 
     tb_tv_place_bars(tv);
