@@ -386,6 +386,8 @@ typedef struct tb_timer {
     void *data;
 } tb_timer;
 
+#if defined(TB_TIMER_TIMERFD)
+
 /* Arm the timer for a new interval; ms <= 0 stops it. */
 static inline void tb_timer_set(tb_timer *tm, int ms) {
     struct itimerspec its;
@@ -406,11 +408,46 @@ static inline void tb_timer_on_fire(tb_app *t, int fd, void *data) {
     tm->cb(t, tm->data);
 }
 
+static inline int tb_timer_open(tb_timer *tm) {
+    tm->fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    return tm->fd < 0 ? -1 : 0;
+}
+
+#elif defined(TB_TIMER_KQUEUE)
+
+/* The kqueue fd becomes readable when the EVFILT_TIMER event fires.
+ * Ident 1 is the only event this kqueue holds. ms is in milliseconds. */
+static inline void tb_timer_set(tb_timer *tm, int ms) {
+    struct kevent kev;
+    if (ms > 0)
+        EV_SET(&kev, 1, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0, ms, NULL);
+    else
+        EV_SET(&kev, 1, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
+    kevent(tm->fd, &kev, 1, NULL, 0, NULL);   /* EV_DELETE may ENOENT; ignore */
+}
+
+/* Read/fire callback: drain the pending event without blocking. */
+static inline void tb_timer_on_fire(tb_app *t, int fd, void *data) {
+    tb_timer *tm = (tb_timer *)data;
+    struct kevent kev;
+    struct timespec zero = { 0, 0 };
+    if (kevent(fd, NULL, 0, &kev, 1, &zero) <= 0) return;
+    tm->cb(t, tm->data);
+}
+
+static inline int tb_timer_open(tb_timer *tm) {
+    tm->fd = kqueue();
+    if (tm->fd < 0) return -1;
+    fcntl(tm->fd, F_SETFD, FD_CLOEXEC);
+    return 0;
+}
+
+#endif
+
 static inline tb_timer *tb_timer_new(tb_app *t, int ms, tb_action cb, void *data) {
     tb_timer *tm = calloc(1, sizeof *tm);
     if (!tm) tb_oom();
-    tm->fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-    if (tm->fd < 0) {
+    if (tb_timer_open(tm) < 0) {
         free(tm);
         return NULL;
     }

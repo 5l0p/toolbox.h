@@ -17,9 +17,25 @@
 #include <string.h>
 #include <stdint.h>
 #include <sys/select.h>
-#include <sys/timerfd.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
+
+/* Timer backend. Linux uses timerfd; OpenBSD (and other BSDs) have no
+ * timerfd and use a kqueue with EVFILT_TIMER, which select() can poll
+ * the same way. */
+#if defined(__linux__)
+#  include <sys/timerfd.h>
+#  define TB_TIMER_TIMERFD 1
+#elif defined(__OpenBSD__)
+#  include <sys/types.h>
+#  include <sys/time.h>
+#  include <sys/event.h>
+#  define TB_TIMER_KQUEUE 1
+#else
+#  error "toolbox: unsupported platform (need Linux or OpenBSD timer support)"
+#endif
+
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
